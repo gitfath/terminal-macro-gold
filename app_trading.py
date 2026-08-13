@@ -86,12 +86,13 @@ def get_raw_score(event_name, actual, forecast, prev):
     return score, detail
 
 # ==========================================
-# 4. RÉCUPÉRATION FRED API (DONNÉES OFFICIELLES)
+# 4. RÉCUPÉRATION FRED API (ROBUSTE & TIMEOUT ÉTENDU)
 # ==========================================
 @st.cache_data(ttl=600)
 def fetch_macro_data():
     FRED_API_KEY = os.getenv("FRED_API_KEY")
     if not FRED_API_KEY:
+        st.error("❌ Clé API FRED manquante dans les Secrets Streamlit !")
         return []
     
     series_map = {
@@ -102,10 +103,13 @@ def fetch_macro_data():
     }
     
     events_list = []
-    try:
-        for series_id, info in series_map.items():
-            url = f"https://api.stlouisfed.org/fred/series/observations?series_id={series_id}&api_key={FRED_API_KEY}&file_type=json&sort_order=desc&limit=2"
-            res = requests.get(url, timeout=5)
+    headers = {"User-Agent": "Mozilla/5.0"}
+    
+    for series_id, info in series_map.items():
+        url = f"https://api.stlouisfed.org/fred/series/observations?series_id={series_id}&api_key={FRED_API_KEY}&file_type=json&sort_order=desc&limit=2"
+        try:
+            # Timeout augmenté à 15 secondes pour éviter les coupures réseau du cloud
+            res = requests.get(url, headers=headers, timeout=15)
             
             if res.status_code == 200:
                 data = res.json().get('observations', [])
@@ -114,22 +118,23 @@ def fetch_macro_data():
                     prev = float(data[1]['value'])
                     date_val = data[0]['date']
                     
-                    # Simulation intelligente : si la date du jour correspond au relevé, l'annonce est considérée comme publiée, sinon à venir
-                    gmt_t = info["gmt_time"]
-                    
                     events_list.append({
                         "event": info["name"],
                         "country": "US",
-                        "time_gmt": gmt_t,
+                        "time_gmt": info["gmt_time"],
                         "date_releve": date_val,
                         "actual": actual,
-                        "estimate": prev, # Consensus de référence
+                        "estimate": prev,
                         "prev": prev,
-                        "status": "PUBLIÉ" # FRED donne l'historique récent
+                        "status": "PUBLIÉ"
                     })
-    except Exception as e:
-        st.error(f"Erreur FRED : {e}")
-        
+            else:
+                st.warning(f"⚠️ FRED a répondu avec le code {res.status_code} pour {info['name']}")
+        except requests.exceptions.Timeout:
+            st.error(f"⏳ Délai dépassé pour l'indicateur {info['name']} (Le serveur FRED met trop de temps à répondre).")
+        except Exception as e:
+            st.error(f"❌ Erreur réseau sur {info['name']} : {e}")
+            
     return events_list
 
 # ==========================================
