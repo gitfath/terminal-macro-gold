@@ -4,7 +4,7 @@ import requests
 import pandas as pd
 import streamlit as st
 import streamlit.components.v1 as components
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from dotenv import load_dotenv
 
 # ==========================================
@@ -25,12 +25,11 @@ def get_current_gmt_time():
 # 2. MULTIMÉDIA & TÉLÉGRAM (ALERTES)
 # ==========================================
 def play_alert_sound(sound_url="https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3"):
-    unique_key = f"sound_{int(time.time() * 1000)}"
-    components.html(f'<audio autoplay style="display:none;"><source src="{sound_url}" type="audio/mp3"></audio>', height=0, key=unique_key)
+    # Suppression du paramètre 'key' qui causait le TypeError
+    components.html(f'<audio autoplay style="display:none;"><source src="{sound_url}" type="audio/mp3"></audio>', height=0)
 
 def speak_text(text_to_speak):
     safe_text = text_to_speak.replace("'", "\\'").replace("\n", " ")
-    unique_key = f"speech_{int(time.time() * 1000)}"
     js_code = f"""
         <script>
             if ('speechSynthesis' in window) {{
@@ -42,7 +41,7 @@ def speak_text(text_to_speak):
             }}
         </script>
     """
-    components.html(js_code, height=0, key=unique_key)
+    components.html(js_code, height=0)
 
 def send_telegram_alert(title_msg, message_body):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
@@ -51,9 +50,9 @@ def send_telegram_alert(title_msg, message_body):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message, "parse_mode": "HTML"}
     try:
-        requests.post(url, json=payload, timeout=5)
-        return True
-    except:
+        res = requests.post(url, json=payload, timeout=5)
+        return res.status_code == 200
+    except Exception:
         return False
 
 # ==========================================
@@ -89,7 +88,7 @@ def get_raw_score(event_name, actual, forecast, prev):
     return score, detail
 
 # ==========================================
-# 4. RÉCUPÉRATION FRED API (ROBUSTE & TIMEOUT ÉTENDU)
+# 4. RÉCUPÉRATION FRED API
 # ==========================================
 @st.cache_data(ttl=600)
 def fetch_macro_data():
@@ -98,7 +97,6 @@ def fetch_macro_data():
         st.error("❌ Clé API FRED manquante dans les Secrets Streamlit !")
         return []
 
-    # CATALOGUE ÉLARGI DES ANNONCES
     series_map = {
         "DFII10": {"name": "Taux Réels 10Y (TIPS)", "gmt_time": "20:00 GMT"},
         "CPIAUCSL": {"name": "CPI (Consumer Price Index)", "gmt_time": "12:30 GMT"},
@@ -138,17 +136,13 @@ def fetch_macro_data():
                         "prev": prev,
                         "status": "PUBLIÉ"
                     })
-            else:
-                st.warning(f"⚠️ FRED a répondu avec le code {res.status_code} pour {info['name']}")
-        except requests.exceptions.Timeout:
-            st.error(f"⏳ Délai dépassé pour l'indicateur {info['name']} (Le serveur FRED met trop de temps à répondre).")
-        except Exception as e:
-            st.error(f"❌ Erreur réseau sur {info['name']} : {e}")
+        except Exception:
+            pass
 
     return events_list
 
 # ==========================================
-# 5. EXECUTION & AFFICHAGE DE L'INTERFACE
+# 5. EXECUTION, ENVOI AUTOMATIQUE & INTERFACE
 # ==========================================
 gmt_time, gmt_date = get_current_gmt_time()
 
@@ -172,17 +166,35 @@ if events:
     # BANNIÈRE DE PRÉDICTION
     st.subheader("💡 Direction & Impulsion Immédiate XAU/USD")
     if final_score >= 0.25:
-        st.success(f"### 🟢 BIAIS BULLISH (HAUSSIER) | Score Macro : {round(final_score, 2)}")
+        bias_text = "🟢 BIAIS BULLISH (HAUSSIER)"
+        st.success(f"### {bias_text} | Score Macro : {round(final_score, 2)}")
     elif final_score <= -0.25:
-        st.error(f"### 🔴 BIAIS BEARISH (BAISSIER) | Score Macro : {round(final_score, 2)}")
+        bias_text = "🔴 BIAIS BEARISH (BAISSIER)"
+        st.error(f"### {bias_text} | Score Macro : {round(final_score, 2)}")
     else:
-        st.warning(f"### 🟧 BIAIS NEUTRE / CONSOLIDATION | Score Macro : {round(final_score, 2)}")
+        bias_text = "🟧 BIAIS NEUTRE / CONSOLIDATION"
+        st.warning(f"### {bias_text} | Score Macro : {round(final_score, 2)}")
 
     st.markdown("#### 📜 Synthèse des Moteurs de Décision :")
     for d in details:
         st.markdown(f"- {d}")
 
     st.divider()
+
+    # --- ENVOI AUTOMATIQUE AU BOT TELEGRAM ---
+    # Détection de changement de signal ou premier chargement de la journée
+    last_sent_key = f"sent_{round(final_score, 2)}_{gmt_date}"
+    if "last_signal_sent" not in st.session_state:
+        st.session_state["last_signal_sent"] = None
+
+    if st.session_state["last_signal_sent"] != last_sent_key:
+        auto_msg = f"<b>{bias_text}</b>\n<b>Score Macro : {round(final_score, 2)}</b>\n\n"
+        auto_msg += "<b>📊 Synthèse des Moteurs :</b>\n" + "\n".join([f"• {d}" for d in details])
+        
+        if send_telegram_alert(f"Mise à Jour Macro - {gmt_time} GMT", auto_msg):
+            st.session_state["last_signal_sent"] = last_sent_key
+            play_alert_sound()
+            st.toast("📲 Synthèse envoyée automatiquement sur Telegram !", icon="⚡")
 
     # TABLEAU DES ANNONCES
     st.subheader("📅 Tableau Macro Stratégique (Annonces Importantes)")
@@ -192,13 +204,12 @@ if events:
         use_container_width=True
     )
 
-    # ALERTE TELEGRAM
-    if st.button("📲 Envoyer la Synthèse sur Telegram"):
-        msg = f"<b>💰 SCORE MACRO XAU/USD : {round(final_score, 2)}</b>\n\n"
+    # BOUTON DE REDIFFUSION MANUELLE
+    if st.button("🔄 Renvoyer Manuellement sur Telegram"):
+        msg = f"<b>{bias_text}</b>\n<b>Score Macro : {round(final_score, 2)}</b>\n\n"
         msg += "<b>📊 Synthèse :</b>\n" + "\n".join([f"• {d}" for d in details])
         if send_telegram_alert(f"FLASH MACRO - {gmt_time} GMT", msg):
-            st.success("Alerte diffusée avec succès !")
+            st.success("Alerte réexpédiée avec succès !")
             play_alert_sound()
-            speak_text("Alerte macro diffusée avec succès.")
         else:
-            st.error("Échec de l'envoi de l'alerte.")
+            st.error("Échec de l'envoi. Vérifiez les identifiants Telegram.")
