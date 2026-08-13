@@ -25,10 +25,12 @@ def get_current_gmt_time():
 # 2. MULTIMÉDIA & TÉLÉGRAM (ALERTES)
 # ==========================================
 def play_alert_sound(sound_url="https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3"):
-    components.html(f'<audio autoplay style="display:none;"><source src="{sound_url}" type="audio/mp3"></audio>', height=0)
+    unique_key = f"sound_{int(time.time() * 1000)}"
+    components.html(f'<audio autoplay style="display:none;"><source src="{sound_url}" type="audio/mp3"></audio>', height=0, key=unique_key)
 
 def speak_text(text_to_speak):
-    safe_text = text_to_speak.replace("'", "\\'")
+    safe_text = text_to_speak.replace("'", "\\'").replace("\n", " ")
+    unique_key = f"speech_{int(time.time() * 1000)}"
     js_code = f"""
         <script>
             if ('speechSynthesis' in window) {{
@@ -40,7 +42,7 @@ def speak_text(text_to_speak):
             }}
         </script>
     """
-    components.html(js_code, height=0)
+    components.html(js_code, height=0, key=unique_key)
 
 def send_telegram_alert(title_msg, message_body):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
@@ -50,8 +52,9 @@ def send_telegram_alert(title_msg, message_body):
     payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message, "parse_mode": "HTML"}
     try:
         requests.post(url, json=payload, timeout=5)
+        return True
     except:
-        pass
+        return False
 
 # ==========================================
 # 3. MOTEUR D'ANALYSE & SYNERGIES
@@ -66,7 +69,7 @@ def get_raw_score(event_name, actual, forecast, prev):
     detail = ""
     name = event_name.lower()
 
-    if "nonfarm payrolls" in name:
+    if "nonfarm payrolls" in name or "nfp" in name:
         if delta < -30: score, detail = 0.40, f"🟢 NFP faible ({actual}) -> Gold ⬆"
         elif delta > 30: score, detail = -0.40, f"🔴 NFP fort ({actual}) -> Gold ⬇"
     elif "unemployment rate" in name:
@@ -82,7 +85,7 @@ def get_raw_score(event_name, actual, forecast, prev):
         if delta < 0: score, detail = 0.15, f"🟡 {event_name} sous les attentes"
         elif delta > 0: score, detail = -0.15, f"🔴 {event_name} au-dessus des attentes"
         else: score, detail = 0.0, f"⚪ {event_name} conforme"
-            
+
     return score, detail
 
 # ==========================================
@@ -94,30 +97,37 @@ def fetch_macro_data():
     if not FRED_API_KEY:
         st.error("❌ Clé API FRED manquante dans les Secrets Streamlit !")
         return []
-    
+
+    # CATALOGUE ÉLARGI DES ANNONCES
     series_map = {
-        "CPIAUCSL": {"name": "Consumer Price Index (CPI)", "gmt_time": "12:30"},
-        "UNRATE": {"name": "Unemployment Rate", "gmt_time": "12:30"},
-        "PAYEMS": {"name": "Nonfarm Payrolls", "gmt_time": "12:30"},
-        "RRSFS": {"name": "Retail Sales", "gmt_time": "12:30"}
+        "DFII10": {"name": "Taux Réels 10Y (TIPS)", "gmt_time": "20:00 GMT"},
+        "CPIAUCSL": {"name": "CPI (Consumer Price Index)", "gmt_time": "12:30 GMT"},
+        "CPILFESL": {"name": "Core CPI (Inflation)", "gmt_time": "12:30 GMT"},
+        "PCEPI": {"name": "PCE Inflation Index", "gmt_time": "12:30 GMT"},
+        "PAYEMS": {"name": "Nonfarm Payrolls (NFP)", "gmt_time": "12:30 GMT"},
+        "UNRATE": {"name": "Unemployment Rate", "gmt_time": "12:30 GMT"},
+        "ICSA": {"name": "Initial Jobless Claims", "gmt_time": "12:30 GMT"},
+        "RSAFS": {"name": "Retail Sales", "gmt_time": "12:30 GMT"},
+        "PPIACO": {"name": "PPI (Producer Price Index)", "gmt_time": "12:30 GMT"},
+        "FEDFUNDS": {"name": "Fed Funds Rate", "gmt_time": "18:00 GMT"},
+        "GDP": {"name": "GDP Growth Rate", "gmt_time": "12:30 GMT"}
     }
-    
+
     events_list = []
     headers = {"User-Agent": "Mozilla/5.0"}
-    
+
     for series_id, info in series_map.items():
         url = f"https://api.stlouisfed.org/fred/series/observations?series_id={series_id}&api_key={FRED_API_KEY}&file_type=json&sort_order=desc&limit=2"
         try:
-            # Timeout augmenté à 15 secondes pour éviter les coupures réseau du cloud
             res = requests.get(url, headers=headers, timeout=15)
-            
+
             if res.status_code == 200:
                 data = res.json().get('observations', [])
-                if len(data) >= 2:
+                if len(data) >= 2 and data[0]['value'] != "." and data[1]['value'] != ".":
                     actual = float(data[0]['value'])
                     prev = float(data[1]['value'])
                     date_val = data[0]['date']
-                    
+
                     events_list.append({
                         "event": info["name"],
                         "country": "US",
@@ -134,79 +144,61 @@ def fetch_macro_data():
             st.error(f"⏳ Délai dépassé pour l'indicateur {info['name']} (Le serveur FRED met trop de temps à répondre).")
         except Exception as e:
             st.error(f"❌ Erreur réseau sur {info['name']} : {e}")
-            
+
     return events_list
 
 # ==========================================
-# 5. INTERFACE UTILISATEUR & LOGIQUE GMT
+# 5. EXECUTION & AFFICHAGE DE L'INTERFACE
 # ==========================================
-current_gmt, current_date = get_current_gmt_time()
-st.title(f"⚡ Terminal Macro — XAU/USD (Heure GMT : {current_gmt})")
+gmt_time, gmt_date = get_current_gmt_time()
 
-st.sidebar.header("⚙️ Paramètres")
-if st.sidebar.button("🔊 Activer l'Audio"):
-    play_alert_sound()
-    speak_text("Système initialisé en heure GMT.")
-    st.sidebar.success("Prêt !")
+st.title("⚡ Terminal Macro Institutionnel XAU/USD")
+st.caption(f"Horloge UTC/GMT : **{gmt_time}** | Date : **{gmt_date}**")
 
 events = fetch_macro_data()
 
-if not events:
-    st.warning("⏳ En attente des flux macroéconomiques...")
-else:
-    # Séparation : Annonces du jour / Récentes vs À venir
-    st.subheader("📅 1. Agenda des Annonces & Indicateurs Clés (Heure GMT)")
-    
-    upcoming_events = [ev for ev in events if ev.get('status') == 'AVENIR']
-    published_events = [ev for ev in events if ev.get('status') == 'PUBLIÉ']
-    
-    # Affichage des annonces à venir
-    with st.expander("📌 Annonces à venir / Suivi du jour", expanded=True):
-        if not upcoming_events:
-            st.info("Aucune annonce programmée dans les minutes exactes à venir. Les derniers chiffres officiels de référence sont affichés ci-dessous.")
-        for ev in events:
-            st.markdown(f"• **{ev['event']}** | Heure prévue : `{ev['time_gmt']} GMT` | Référence précédente : `{ev['prev']}`")
+if events:
+    total_score = 0.0
+    details = []
+
+    for ev in events:
+        score, detail = get_raw_score(ev["event"], ev["actual"], ev["estimate"], ev["prev"])
+        total_score += score
+        if detail:
+            details.append(detail)
+
+    final_score = max(min(total_score, 1.0), -1.0)
+
+    # BANNIÈRE DE PRÉDICTION
+    st.subheader("💡 Direction & Impulsion Immédiate XAU/USD")
+    if final_score >= 0.25:
+        st.success(f"### 🟢 BIAIS BULLISH (HAUSSIER) | Score Macro : {round(final_score, 2)}")
+    elif final_score <= -0.25:
+        st.error(f"### 🔴 BIAIS BEARISH (BAISSIER) | Score Macro : {round(final_score, 2)}")
+    else:
+        st.warning(f"### 🟧 BIAIS NEUTRE / CONSOLIDATION | Score Macro : {round(final_score, 2)}")
+
+    st.markdown("#### 📜 Synthèse des Moteurs de Décision :")
+    for d in details:
+        st.markdown(f"- {d}")
 
     st.divider()
-    st.subheader("🎯 2. Interprétation Post-Publication & Biais Or (XAU/USD)")
 
-    net_score = 0.0
-    all_details = []
-    event_names = []
-    
-    for ev in events:
-        event_names.append(ev['event'])
-        score, detail = get_raw_score(ev['event'], ev['actual'], ev['estimate'], ev['prev'])
-        net_score += score
-        if detail:
-            all_details.append(detail)
-            
-    if net_score >= 0.25: bias = "HAUSSIER (BULLISH)"
-    elif net_score <= -0.25: bias = "BAISSIER (BEARISH)"
-    else: bias = "NEUTRE / MIXTE"
-        
-    confidence = min(abs(net_score) * 100, 100)
+    # TABLEAU DES ANNONCES
+    st.subheader("📅 Tableau Macro Stratégique (Annonces Importantes)")
+    df_events = pd.DataFrame(events)
+    st.dataframe(
+        df_events[["event", "time_gmt", "date_releve", "actual", "estimate", "prev", "status"]],
+        use_container_width=True
+    )
 
-    # Automatisation Telegram propre
-    if 'last_gmt_alert' not in st.session_state:
-        st.session_state['last_gmt_alert'] = None
-
-    alert_key = f"{current_date}_{net_score}"
-    if st.session_state['last_gmt_alert'] != alert_key:
-        msg_body = f"<b>🕒 Heure GMT :</b> {current_gmt}\n<b>🎯 Biais :</b> {bias} (Force: {round(confidence)}/100)\n\n<b>Analyse :</b>\n" + "\n".join([f"• {d}" for d in all_details])
-        send_telegram_alert("SYNTHÈSE MACRO XAU/USD", msg_body)
-        play_alert_sound()
-        speak_text(f"Nouvelle analyse macro. Biais {bias} sur l'Or.")
-        st.session_state['last_gmt_alert'] = alert_key
-
-    st.success(f"### Biais Consolidé : {bias} (Force: {round(confidence)}/100)")
-    
-    col1, col2 = st.columns(2)
-    with col1:
-        st.write("**Détails de l'algorithme :**")
-        for d in all_details:
-            st.write(f"- {d}")
-    with col2:
-        st.write("**Valeurs Officielles Enregistrées :**")
-        for ev in events:
-            st.write(f"- {ev['event']} : Actuel `{ev['actual']}` (Précédent `{ev['prev']}`)")
+    # ALERTE TELEGRAM
+    if st.button("📲 Envoyer la Synthèse sur Telegram"):
+        msg = f"<b>💰 SCORE MACRO XAU/USD : {round(final_score, 2)}</b>\n\n"
+        msg += "<b>📊 Synthèse :</b>\n" + "\n".join([f"• {d}" for d in details])
+        if send_telegram_alert(f"FLASH MACRO - {gmt_time} GMT", msg):
+            st.success("Alerte diffusée avec succès !")
+            play_alert_sound()
+            speak_text("Alerte macro diffusée avec succès.")
+        else:
+            st.error("Échec de l'envoi de l'alerte.")
