@@ -13,6 +13,7 @@ from dotenv import load_dotenv
 load_dotenv()
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+TELEGRAM_BOT_LINK = "https://t.me/Fath07_bot"
 
 st.set_page_config(page_title="Terminal Macro Institutionnel XAU/USD", page_icon="⚡", layout="wide")
 
@@ -25,7 +26,6 @@ def get_current_gmt_time():
 # 2. MULTIMÉDIA & TÉLÉGRAM (ALERTES)
 # ==========================================
 def play_alert_sound(sound_url="https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3"):
-    # Suppression du paramètre 'key' qui causait le TypeError
     components.html(f'<audio autoplay style="display:none;"><source src="{sound_url}" type="audio/mp3"></audio>', height=0)
 
 def speak_text(text_to_speak):
@@ -46,7 +46,7 @@ def speak_text(text_to_speak):
 def send_telegram_alert(title_msg, message_body):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         return False
-    message = f"<b>⚡ {title_msg} ⚡</b>\n\n{message_body}"
+    message = f"<b>⚡ {title_msg} ⚡</b>\n\n{message_body}\n\n🤖 <i>Rejoindre le bot : {TELEGRAM_BOT_LINK}</i>"
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message, "parse_mode": "HTML"}
     try:
@@ -146,6 +146,11 @@ def fetch_macro_data():
 # ==========================================
 gmt_time, gmt_date = get_current_gmt_time()
 
+# BARRE LATÉRALE AVEC ACCÈS RAPIDE TELEGRAM
+st.sidebar.header("🤖 Bot Telegram")
+st.sidebar.link_button("👉 Ouvrir @Fath07_bot", TELEGRAM_BOT_LINK, use_container_width=True)
+st.sidebar.caption(f"Lien direct : [{TELEGRAM_BOT_LINK}]({TELEGRAM_BOT_LINK})")
+
 st.title("⚡ Terminal Macro Institutionnel XAU/USD")
 st.caption(f"Horloge UTC/GMT : **{gmt_time}** | Date : **{gmt_date}**")
 
@@ -175,6 +180,8 @@ if events:
         bias_text = "🟧 BIAIS NEUTRE / CONSOLIDATION"
         st.warning(f"### {bias_text} | Score Macro : {round(final_score, 2)}")
 
+    st.markdown(f"📲 **Suivre les signaux en direct sur Telegram :** [{TELEGRAM_BOT_LINK}]({TELEGRAM_BOT_LINK})")
+
     st.markdown("#### 📜 Synthèse des Moteurs de Décision :")
     for d in details:
         st.markdown(f"- {d}")
@@ -182,7 +189,6 @@ if events:
     st.divider()
 
     # --- ENVOI AUTOMATIQUE AU BOT TELEGRAM ---
-    # Détection de changement de signal ou premier chargement de la journée
     last_sent_key = f"sent_{round(final_score, 2)}_{gmt_date}"
     if "last_signal_sent" not in st.session_state:
         st.session_state["last_signal_sent"] = None
@@ -204,12 +210,16 @@ if events:
         use_container_width=True
     )
 
-    # BOUTON DE REDIFFUSION MANUELLE
-    if st.button("🔄 Renvoyer Manuellement sur Telegram"):
-        msg = f"<b>{bias_text}</b>\n<b>Score Macro : {round(final_score, 2)}</b>\n\n"
-        msg += "<b>📊 Synthèse :</b>\n" + "\n".join([f"• {d}" for d in details])
-        if send_telegram_alert(f"FLASH MACRO - {gmt_time} GMT", msg):
-            st.success("Alerte réexpédiée avec succès !")
-            play_alert_sound()
-        else:
-            st.error("Échec de l'envoi. Vérifiez les identifiants Telegram.")
+    # BOUTONS D'ACTION (TELEGRAM)
+    col1, col2 = st.columns([1, 1])
+    with col1:
+        if st.button("🔄 Renvoyer Manuellement sur Telegram", use_container_width=True):
+            msg = f"<b>{bias_text}</b>\n<b>Score Macro : {round(final_score, 2)}</b>\n\n"
+            msg += "<b>📊 Synthèse :</b>\n" + "\n".join([f"• {d}" for d in details])
+            if send_telegram_alert(f"FLASH MACRO - {gmt_time} GMT", msg):
+                st.success("Alerte réexpédiée avec succès !")
+                play_alert_sound()
+            else:
+                st.error("Échec de l'envoi. Vérifiez les identifiants Telegram.")
+    with col2:
+        st.link_button("🤖 Accéder au Bot Telegram (@Fath07_bot)", TELEGRAM_BOT_LINK, use_container_width=True)
