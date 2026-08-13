@@ -210,16 +210,3 @@ if events:
         use_container_width=True
     )
 
-    # BOUTONS D'ACTION (TELEGRAM)
-    col1, col2 = st.columns([1, 1])
-    with col1:
-        if st.button("🔄 Renvoyer Manuellement sur Telegram", use_container_width=True):
-            msg = f"<b>{bias_text}</b>\n<b>Score Macro : {round(final_score, 2)}</b>\n\n"
-            msg += "<b>📊 Synthèse :</b>\n" + "\n".join([f"• {d}" for d in details])
-            if send_telegram_alert(f"FLASH MACRO - {gmt_time} GMT", msg):
-                st.success("Alerte réexpédiée avec succès !")
-                play_alert_sound()
-            else:
-                st.error("Échec de l'envoi. Vérifiez les identifiants Telegram.")
-    with col2:
-        st.link_button("🤖 Accéder au Bot Telegram (@Fath07_bot)", TELEGRAM_BOT_LINK, use_container_width=True)
